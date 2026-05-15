@@ -1,7 +1,11 @@
+import os
+os.environ.setdefault("NUMEXPR_MAX_THREADS", "1")
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
+
 import argparse
 import copy
 import json
-import os
 import sys
 from datetime import datetime
 from typing import Dict, Any, Optional
@@ -10,15 +14,16 @@ import numpy as np
 import torch
 import yaml
 
+torch.set_num_threads(int(os.environ.get("OMP_NUM_THREADS", "1")))
+
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 if PROJECT_ROOT not in sys.path:
     sys.path.append(PROJECT_ROOT)
 
 from conf.config import load_config
 from dataset.load_dataset import ContinualStreamingManager
-from models.vit_cms import ViT_CMS
-from training.trainer import Trainer
-from training.evaluator import Evaluator
+from models.meta_nath_core import MetaNATHCore
+from training.meta_nath_engine import MetaNATHEngine
 from utils.global_seed import set_seed
 
 
@@ -51,6 +56,7 @@ def apply_profile(config: Dict[str, Any], profile: str) -> Dict[str, Any]:
         dataset_cfg['img_size'] = min(int(dataset_cfg.get('img_size', 256)), 128)
         dataset_cfg['num_workers'] = 0
         training_cfg['epochs_per_task'] = 1
+        training_cfg['stream_repeats'] = 1
         if isinstance(dataset_cfg.get('class_order'), list) and dataset_cfg['class_order']:
             dataset_cfg['class_order'] = dataset_cfg['class_order'][:2]
         if isinstance(model_cfg.get('extract_layers'), list) and model_cfg['extract_layers']:
@@ -61,6 +67,7 @@ def apply_profile(config: Dict[str, Any], profile: str) -> Dict[str, Any]:
         dataset_cfg['img_size'] = min(int(dataset_cfg.get('img_size', 256)), 192)
         dataset_cfg['num_workers'] = min(int(dataset_cfg.get('num_workers', 4)), 2)
         training_cfg['epochs_per_task'] = min(int(training_cfg.get('epochs_per_task', 10)), 2)
+        training_cfg['stream_repeats'] = min(int(training_cfg.get('stream_repeats', training_cfg['epochs_per_task'])), 2)
         if isinstance(dataset_cfg.get('class_order'), list) and dataset_cfg['class_order']:
             dataset_cfg['class_order'] = dataset_cfg['class_order'][:4]
 
@@ -69,23 +76,18 @@ def apply_profile(config: Dict[str, Any], profile: str) -> Dict[str, Any]:
 
 def build_model(config: Dict[str, Any]) -> torch.nn.Module:
     model_cfg = config.get('model', {})
-    dataset_cfg = config.get('dataset', {})
+    training_cfg = config.get('training', {})
+    n_patch_cfg = model_cfg.get('n_patch', None)
+    n_patch = None if n_patch_cfg is None else int(n_patch_cfg)
 
-    backbone = model_cfg.get('backbone', 'vit_base_patch16_224')
-    if 'vit' not in str(backbone).lower():
-        raise ValueError(f"Unsupported backbone '{backbone}'. Current runner supports ViT models only.")
-
-    return ViT_CMS(
-        model_name=backbone,
-        pretrained=bool(model_cfg.get('pretrained', True)),
-        cms_levels=int(model_cfg.get('cms_levels', 3)),
-        k=int(model_cfg.get('k', 2)),
-        extract_layers=list(model_cfg.get('extract_layers', [3, 6, 9])),
-        img_size=int(dataset_cfg.get('img_size', 256)),
-        use_spatial_gate=bool(model_cfg.get('use_spatial_gate', True)),
-        freeze_backbone=bool(model_cfg.get('freeze_backbone', False)),
-        freeze_patch_embed=bool(model_cfg.get('freeze_patch_embed', False)),
-        reduced_dim=int(model_cfg.get('reduced_dim', 128)),
+    return MetaNATHCore(
+        d=int(model_cfg.get('embed_dim', 768)),
+        tau_acc=float(model_cfg.get('tau_acc', 0.25)),
+        max_coreset_size=int(model_cfg.get('max_coreset_size', 1000)),
+        n_patch=n_patch,
+        store_images=bool(model_cfg.get('store_images', True)),
+        device=str(training_cfg.get('device', 'cuda')),
+        backbone_name=model_cfg.get('backbone', 'facebook/dinov3-vitb14-pretrain'),
     )
 
 
@@ -127,6 +129,7 @@ def _truncate_tasks_if_needed(config: Dict[str, Any], max_tasks: Optional[int]) 
 def run_experiment(config: Dict[str, Any], run_suffix: str = '', disable_wandb: bool = False, quiet: bool = False) -> Dict[str, Any]:
     training_cfg = config.get('training', {})
     logging_cfg = config.get('logging', {})
+    evaluation_cfg = config.get('evaluation', {})
 
     seed = int(training_cfg.get('seed', 42))
     set_seed(seed)
@@ -152,28 +155,18 @@ def run_experiment(config: Dict[str, Any], run_suffix: str = '', disable_wandb: 
         device = 'cpu'
     else:
         device = requested_device
-    learning_rate = float(training_cfg.get('learning_rate', 1e-4))
-    use_replay = bool(training_cfg.get('use_replay', False))
-    replay_batch_size = int(training_cfg.get('replay_batch_size', 32))
-    task_type = training_cfg.get('task_type', 'anomaly')
-    pixel_loss_weight = float(training_cfg.get('pixel_loss_weight', 0.2))
-
-    trainer = Trainer(
-        model=model,
-        device=device,
-        learning_rate=learning_rate,
-        use_replay=use_replay,
-        replay_batch_size=replay_batch_size,
-        task_type=task_type,
-        pixel_loss_weight=pixel_loss_weight,
-    )
-    evaluator = Evaluator(model=model, device=device, task_type=task_type)
+    engine = MetaNATHEngine(model=model, device=device)
     stream_manager = ContinualStreamingManager(config)
 
     wandb_run = maybe_init_wandb(config, run_name=run_name, run_dir=run_dir, disable_wandb=disable_wandb)
 
-    epochs_per_task = int(training_cfg.get('epochs_per_task', 10))
+    epochs_per_task = int(training_cfg.get('stream_repeats', training_cfg.get('epochs_per_task', 1)))
+    pixel_sample_limit = int(evaluation_cfg.get('pixel_sample_limit', 10000))
+    eval_mode = str(evaluation_cfg.get('mode', 'current')).lower()
+    cumulative_frequency = int(evaluation_cfg.get('cumulative_frequency', 5))
+    final_cumulative = bool(evaluation_cfg.get('final_cumulative', True))
     save_models = bool(logging_cfg.get('save_models', True))
+    checkpoint_mode = str(logging_cfg.get('checkpoint_mode', 'phase12_light')).lower()
 
     task_records = []
 
@@ -188,17 +181,34 @@ def run_experiment(config: Dict[str, Any], run_suffix: str = '', disable_wandb: 
         if not quiet:
             print(f"\n===== Task {task_id}: {category} =====")
 
-        train_metrics = trainer.train_task(
+        train_metrics = engine.train_task(
             train_loader=train_loader,
             task_id=task_id,
             epochs=epochs_per_task,
             verbose=not quiet,
         )
-        eval_metrics = evaluator.evaluate_task(
+        eval_metrics = engine.evaluate_task(
             test_loader=test_loader,
             task_id=task_id,
             verbose=not quiet,
+            pixel_sample_limit=pixel_sample_limit,
         )
+
+        cumulative_eval_metrics = None
+        should_cumulative_eval = (
+            eval_mode != 'cumulative'
+            and cumulative_frequency > 0
+            and (task_id + 1) % cumulative_frequency == 0
+        )
+        if should_cumulative_eval:
+            cumulative_loader = stream_manager.get_cumulative_test_loader()
+            if cumulative_loader is not None:
+                cumulative_eval_metrics = engine.evaluate_task(
+                    test_loader=cumulative_loader,
+                    task_id=task_id,
+                    verbose=not quiet,
+                    pixel_sample_limit=pixel_sample_limit,
+                )
 
         record = {
             'task_id': task_id,
@@ -206,6 +216,8 @@ def run_experiment(config: Dict[str, Any], run_suffix: str = '', disable_wandb: 
             'train': train_metrics,
             'eval': eval_metrics,
         }
+        if cumulative_eval_metrics is not None:
+            record['cumulative_eval'] = cumulative_eval_metrics
         task_records.append(record)
 
         record_path = os.path.join(run_dir, f'task_{task_id:02d}_metrics.json')
@@ -214,12 +226,16 @@ def run_experiment(config: Dict[str, Any], run_suffix: str = '', disable_wandb: 
 
         if save_models:
             ckpt_path = os.path.join(run_dir, f'task_{task_id:02d}_checkpoint.pt')
+            include_full_state = checkpoint_mode == 'phase3_full'
             torch.save(
                 {
                     'task_id': task_id,
                     'category': category,
-                    'model_state_dict': model.state_dict(),
-                    'optimizer_state_dict': trainer.optimizer.state_dict(),
+                    'checkpoint_mode': checkpoint_mode,
+                    'model_state_dict': model.full_state_dict(
+                        include_backbone=include_full_state,
+                        include_images=include_full_state,
+                    ),
                     'config': config,
                 },
                 ckpt_path,
@@ -235,15 +251,44 @@ def run_experiment(config: Dict[str, Any], run_suffix: str = '', disable_wandb: 
                     'train/accuracy': float(train_metrics.get('accuracy', 0.0)),
                     'train/image_loss': float(train_metrics.get('image_loss', 0.0)),
                     'train/pixel_loss': float(train_metrics.get('pixel_loss', 0.0)),
+                    'train/surprise_score': float(train_metrics.get('avg_surprise', 0.0)),
+                    'train/acc_gating': float(train_metrics.get('avg_acc', 0.0)),
+                    'train/acc_approval_rate': float(train_metrics.get('acc_approval_rate', 0.0)),
+                    'train/coreset_size': float(train_metrics.get('coreset_size', 0.0)),
+                    'train/normal_update_samples': float(train_metrics.get('normal_update_samples', 0.0)),
+                    'train/skipped_anomaly_count': float(train_metrics.get('skipped_anomaly_count', 0.0)),
                     'eval/loss': float(eval_metrics.get('loss', 0.0)),
                     'eval/accuracy': float(eval_metrics.get('accuracy', 0.0)),
                     'eval/f1': float(eval_metrics.get('f1', 0.0)),
                     'eval/auroc': float(eval_metrics.get('auroc', 0.0)),
                     'eval/image_ap': float(eval_metrics.get('image_ap', 0.0)),
                     'eval/pixel_f1': float(eval_metrics.get('pixel_f1', 0.0)),
+                    'eval/pixel_aupr': float(eval_metrics.get('pixel_aupr', 0.0)),
+                    'eval/eval_num_images': float(eval_metrics.get('eval_num_images', 0.0)),
+                    'eval/eval_seconds': float(eval_metrics.get('eval_seconds', 0.0)),
                 },
                 step=task_id,
             )
+
+    final_cumulative_metrics = None
+    if task_records and final_cumulative and eval_mode != 'cumulative':
+        if len(task_records) == 1:
+            final_cumulative_metrics = task_records[-1]['eval']
+        elif 'cumulative_eval' in task_records[-1]:
+            final_cumulative_metrics = task_records[-1]['cumulative_eval']
+        else:
+            cumulative_loader = stream_manager.get_cumulative_test_loader()
+            if cumulative_loader is not None:
+                final_cumulative_metrics = engine.evaluate_task(
+                    test_loader=cumulative_loader,
+                    task_id=int(task_records[-1]['task_id']),
+                    verbose=not quiet,
+                    pixel_sample_limit=pixel_sample_limit,
+                )
+
+        if final_cumulative_metrics is not None:
+            with open(os.path.join(run_dir, 'final_cumulative_metrics.json'), 'w', encoding='utf-8') as f:
+                json.dump(final_cumulative_metrics, f, indent=2)
 
     eval_acc = [float(rec['eval'].get('accuracy', 0.0)) for rec in task_records]
     eval_f1 = [float(rec['eval'].get('f1', 0.0)) for rec in task_records]
@@ -257,6 +302,9 @@ def run_experiment(config: Dict[str, Any], run_suffix: str = '', disable_wandb: 
         'avg_eval_f1': float(np.mean(eval_f1)) if eval_f1 else 0.0,
         'avg_eval_auroc': float(np.mean(eval_auroc)) if eval_auroc else 0.0,
     }
+    if final_cumulative_metrics is not None:
+        summary['final_cumulative_image_auroc'] = float(final_cumulative_metrics.get('image_auroc', 0.0))
+        summary['final_cumulative_pixel_aupr'] = float(final_cumulative_metrics.get('pixel_aupr', 0.0))
 
     with open(os.path.join(run_dir, 'run_summary.json'), 'w', encoding='utf-8') as f:
         json.dump(summary, f, indent=2)
