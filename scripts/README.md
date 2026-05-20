@@ -11,6 +11,7 @@ bash scripts/run_full_demo.sh
 - `run_full_demo.sh`: primary 3-tier MVTec demo workflow.
 - `run_server_phase3.sh`: conservative-only MVTec Phase 3 workflow wrapper.
 - `run_server_visa.sh`: VisA conservative + mechanism + experimental/max-power Phase 3 workflow wrapper.
+- `benchmark/`: paper-style CAD Avg/FM metric collection from saved artifacts.
 - `pipeline/`: reproducible CLIs used by the full demo.
 - `diagnostics/`: smoke tests, summaries, GPU checks, and metric helpers.
 - `workflows/`: optional server workflows. Root-level `run_server_*.sh` files are thin compatibility wrappers.
@@ -28,6 +29,17 @@ bash scripts/run_full_demo.sh
 - `diagnostics/summarize_run.py`: markdown summary for a result directory.
 - `diagnostics/compute_forgetting.py`: forgetting metric from an evaluation matrix.
 - `diagnostics/check_gpu.py`: environment/GPU check.
+
+## Benchmark
+
+- `benchmark/compute_replaycad_metrics.py`: compute Image-AUROC Avg/FM and Pixel-AP Avg/FM from `task_records.json` or `forgetting_matrix.json`.
+- `benchmark/collect_benchmark_table.py`: collect local benchmark rows into a Markdown table.
+
+Example:
+
+```bash
+python scripts/benchmark/compute_replaycad_metrics.py results/<run_dir>/task_records.json --dataset MVTec --method Meta-NATH --print-markdown-row
+```
 
 ## Workflows
 

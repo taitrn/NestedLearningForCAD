@@ -11,7 +11,7 @@
 [![Verified](https://img.shields.io/badge/Verified-MVTec%20AD-green.svg)](https://www.mvtec.com/company/research/datasets/mvtec-ad)
 [![Prepared](https://img.shields.io/badge/Prepared-VisA-lightgrey.svg)](./conf/README.md)
 
-[Overview](#-overview) . [Architecture](#-architecture) . [Results](#-verified-results) . [Installation](#-installation) . [Quick Start](#-quick-start) . [Project Structure](#-project-structure)
+[Overview](#-overview) . [Architecture](#-architecture) . [Results](#-verified-results) . [Benchmark](#-paper-grade-benchmarking) . [Installation](#-installation) . [Quick Start](#-quick-start) . [Project Structure](#-project-structure)
 
 </div>
 
@@ -204,6 +204,45 @@ Max-power Phase 3 details:
 
 ---
 
+## 📏 Paper-Grade Benchmarking
+
+The repository now separates **workflow validation** from **paper-grade CAD benchmarking**.
+
+- Workflow validation asks: can the full pipeline run, save checkpoints, evaluate before/after Phase 3, and pass the configured acceptance gate?
+- Paper-grade benchmarking asks: under a fixed continual task protocol, what are the final Avg and Forgetting Measure (FM) for Image-AUROC and Pixel-AP?
+
+Use these docs as the benchmark source of truth:
+
+| Document | Purpose |
+| :--- | :--- |
+| [`docs/benchmark_protocol.md`](./docs/benchmark_protocol.md) | Defines the CAD task protocol, Avg/FM metrics, and claim boundaries |
+| [`docs/paper_benchmark_plan.md`](./docs/paper_benchmark_plan.md) | Practical checklist for turning demo artifacts into paper-style tables |
+
+Compute ReplayCAD-style metrics from a run artifact:
+
+```bash
+python scripts/benchmark/compute_replaycad_metrics.py \
+  results/<run_dir>/task_records.json \
+  --dataset MVTec \
+  --method Meta-NATH \
+  --metrics image_auroc pixel_aupr \
+  --output results/<run_dir>/benchmark_metrics.json \
+  --print-markdown-row
+```
+
+Collect local benchmark rows into one Markdown table:
+
+```bash
+python scripts/benchmark/collect_benchmark_table.py \
+  --dataset MVTec \
+  --row "Meta-NATH=results/<run_dir>/task_records.json" \
+  --output docs/benchmark_results_mvtec.md
+```
+
+Tables generated from local artifacts are reproduced rows. External numbers for UCAD, IUF, CDAD, PatchCore, SimpleNet, MambaAD, InvAD, or ReplayCAD may be used as context only if they are clearly labeled as paper-reported references.
+
+---
+
 ## 📁 Project Structure
 
 ```text
@@ -217,6 +256,8 @@ NestedLearningForCAD/
 │   └── visa_max_power.yaml
 ├── dataset/                           # MVTec/VisA loading and anomaly generation
 ├── docs/                              # Research target, pipeline notes, run log
+│   ├── benchmark_protocol.md          # Paper-grade CAD benchmark protocol
+│   ├── paper_benchmark_plan.md        # Practical paper-benchmark checklist
 │   ├── instruction_CAD.md
 │   ├── PIPELINE.md
 │   └── runs.md
@@ -227,6 +268,7 @@ NestedLearningForCAD/
 │   └── kaggle_visa_workflow.ipynb
 ├── results/                           # Generated experiment outputs
 ├── scripts/                           # CLI entrypoints, workflows, diagnostics
+│   ├── benchmark/                     # ReplayCAD-style Avg/FM metric tooling
 │   ├── diagnostics/
 │   ├── pipeline/
 │   ├── workflows/
@@ -390,6 +432,7 @@ Important generated files:
 | `task_records.json` | Per-task records |
 | `final_cumulative_metrics.json` | Final cumulative evaluation |
 | `forgetting_matrix.json` | Forgetting matrix when enabled |
+| `benchmark_metrics.json` | ReplayCAD-style Avg/FM metrics when generated |
 | `phase3_summary.json` | Phase 3 consolidation summary |
 | `acceptance_report.json` | Before/after acceptance decision |
 | `last_checkpoint.pt` | Default saved checkpoint |
@@ -471,6 +514,8 @@ Older ViT-CMS and supervised-style prototypes are kept under `legacy/` for refer
 ### Reports and Documentation
 
 - 📄 Research Papers: [`docs/papers`](./docs/papers)
+- 📏 Benchmark protocol: [`docs/benchmark_protocol.md`](./docs/benchmark_protocol.md)
+- 🧪 Paper benchmark plan: [`docs/paper_benchmark_plan.md`](./docs/paper_benchmark_plan.md)
 - 🧭 Pipeline reference: [`docs/PIPELINE.md`](./docs/PIPELINE.md)
 - 📈 Verified run log: [`docs/runs.md`](./docs/runs.md)
 - ⚙️ Config guide: [`conf/README.md`](./conf/README.md)
