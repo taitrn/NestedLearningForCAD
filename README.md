@@ -230,6 +230,25 @@ python scripts/benchmark/compute_replaycad_metrics.py \
   --print-markdown-row
 ```
 
+For Phase 3, merge the sequential warmup history with the post-Phase-3 final
+evaluation row before computing Avg/FM:
+
+```bash
+python scripts/benchmark/merge_phase3_benchmark.py \
+  --history-task-records results/<warmup_dir>/task_records.json \
+  --final-eval-task-records results/<after_eval_dir>/task_records.json \
+  --output results/<phase3_dir>/phase3_benchmark_task_records.json \
+  --label Meta-NATH-Phase3
+
+python scripts/benchmark/compute_replaycad_metrics.py \
+  results/<phase3_dir>/phase3_benchmark_task_records.json \
+  --dataset MVTec \
+  --method Meta-NATH-Phase3 \
+  --metrics image_auroc pixel_aupr \
+  --output results/<phase3_dir>/benchmark_metrics.json \
+  --print-markdown-row
+```
+
 Collect local benchmark rows into one Markdown table:
 
 ```bash

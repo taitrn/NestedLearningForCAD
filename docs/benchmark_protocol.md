@@ -56,6 +56,11 @@ The repository stores this information in `task_records.json` when
 - `eval`: metrics for the current task.
 - `forgetting_eval`: metrics on all seen tasks after the current training step.
 
+Phase 3 checkpoints are different from normal sequential training artifacts:
+`evaluate_checkpoint.py` sweeps a fixed final checkpoint across task test sets.
+For a paper-style Phase 3 row, first merge the sequential warmup history with
+the post-Phase-3 final row, then compute Avg/FM from the merged artifact.
+
 ## Metrics
 
 Report the same metric families as ReplayCAD-style CAD tables:
@@ -141,6 +146,16 @@ python scripts/benchmark/compute_replaycad_metrics.py \
   --method Meta-NATH \
   --metrics image_auroc pixel_aupr \
   --output results/<run_dir>/benchmark_metrics.json
+```
+
+Create a Phase 3 benchmark artifact before computing metrics:
+
+```bash
+python scripts/benchmark/merge_phase3_benchmark.py \
+  --history-task-records results/<warmup_dir>/task_records.json \
+  --final-eval-task-records results/<after_eval_dir>/task_records.json \
+  --output results/<phase3_dir>/phase3_benchmark_task_records.json \
+  --label Meta-NATH-Phase3
 ```
 
 Collect one or more local rows into a Markdown table:

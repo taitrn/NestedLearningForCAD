@@ -35,6 +35,7 @@ bash scripts/run_full_demo.sh
 ## Benchmark
 
 - `benchmark/compute_replaycad_metrics.py`: compute Image-AUROC Avg/FM and Pixel-AP Avg/FM from `task_records.json` or `forgetting_matrix.json`.
+- `benchmark/merge_phase3_benchmark.py`: merge sequential warmup history with a post-Phase-3 final evaluation row before computing Phase 3 Avg/FM.
 - `benchmark/collect_benchmark_table.py`: collect local benchmark rows into a Markdown table.
 - `baselines/patchcore_cad.py`: lightweight PatchCore-style CAD baseline adapter. This is not an official PatchCore reproduction, but it follows the local sequential task protocol and writes `task_records.json`.
 
@@ -42,6 +43,13 @@ Example:
 
 ```bash
 python scripts/benchmark/compute_replaycad_metrics.py results/<run_dir>/task_records.json --dataset MVTec --method Meta-NATH --print-markdown-row
+```
+
+Phase 3 benchmark row:
+
+```bash
+python scripts/benchmark/merge_phase3_benchmark.py --history-task-records results/<warmup_dir>/task_records.json --final-eval-task-records results/<after_eval_dir>/task_records.json --output results/<phase3_dir>/phase3_benchmark_task_records.json
+python scripts/benchmark/compute_replaycad_metrics.py results/<phase3_dir>/phase3_benchmark_task_records.json --dataset MVTec --method Meta-NATH-Phase3 --print-markdown-row
 ```
 
 PatchCore-style local baseline:
