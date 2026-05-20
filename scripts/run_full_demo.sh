@@ -35,6 +35,10 @@ export METANATH_REQUIRE_HF_BACKBONE="${METANATH_REQUIRE_HF_BACKBONE:-1}"
 export METANATH_LOCAL_FILES_ONLY="${METANATH_LOCAL_FILES_ONLY:-0}"
 
 STEP_TIMEOUT_SECONDS="${STEP_TIMEOUT_SECONDS:-7200}"
+PREFLIGHT_HF_BACKBONE="${PREFLIGHT_HF_BACKBONE:-1}"
+BACKBONE_PREFLIGHT_TIMEOUT_SECONDS="${BACKBONE_PREFLIGHT_TIMEOUT_SECONDS:-900}"
+BACKBONE_PREFLIGHT_CLEAN_LOCKS="${BACKBONE_PREFLIGHT_CLEAN_LOCKS:-1}"
+LOCAL_FILES_ONLY_AFTER_PREFLIGHT="${LOCAL_FILES_ONLY_AFTER_PREFLIGHT:-1}"
 LOCAL_FILES_ONLY_AFTER_WARMUP="${LOCAL_FILES_ONLY_AFTER_WARMUP:-1}"
 
 RUN_MAIN="${RUN_MAIN:-1}"
@@ -82,6 +86,9 @@ if [[ "$RUN_MAIN" == "1" && "$RUN_EXPERIMENTAL" == "1" && "$REUSE_MAIN_ANCHOR_FO
 fi
 
 TOTAL_STEPS=2
+if [[ "$PREFLIGHT_HF_BACKBONE" == "1" ]]; then
+  TOTAL_STEPS=$((TOTAL_STEPS + 1))
+fi
 if [[ "$RUN_MAIN" == "1" ]]; then
   TOTAL_STEPS=$((TOTAL_STEPS + 5))
 fi
@@ -161,6 +168,15 @@ run_logged() {
     exit "$status"
   fi
   CURRENT_STEP=$((CURRENT_STEP + 1))
+}
+
+run_logged_timeout() {
+  local timeout_seconds="$1"
+  shift
+  local old_timeout="$STEP_TIMEOUT_SECONDS"
+  STEP_TIMEOUT_SECONDS="$timeout_seconds"
+  run_logged "$@"
+  STEP_TIMEOUT_SECONDS="$old_timeout"
 }
 
 require_file() {
@@ -280,6 +296,9 @@ echo "reuse_experimental_anchor=$REUSE_EXPERIMENTAL_ANCHOR"
 echo "require_main_accepted=$REQUIRE_MAIN_ACCEPTED"
 echo "require_experimental_accepted=$REQUIRE_EXPERIMENTAL_ACCEPTED"
 echo "step_timeout_seconds=$STEP_TIMEOUT_SECONDS"
+echo "preflight_hf_backbone=$PREFLIGHT_HF_BACKBONE"
+echo "backbone_preflight_timeout_seconds=$BACKBONE_PREFLIGHT_TIMEOUT_SECONDS"
+echo "backbone_preflight_clean_locks=$BACKBONE_PREFLIGHT_CLEAN_LOCKS"
 echo "hf_hub_disable_xet=$HF_HUB_DISABLE_XET"
 echo "metanath_require_hf_backbone=$METANATH_REQUIRE_HF_BACKBONE"
 echo "metanath_local_files_only=$METANATH_LOCAL_FILES_ONLY"
@@ -294,6 +313,7 @@ run_logged py_compile "$PYTHON_BIN" -u -m py_compile \
   "$PIPELINE_DIR/evaluate_checkpoint.py" \
   "$PIPELINE_DIR/phase3_acceptance.py" \
   "$PIPELINE_DIR/compare_checkpoint_scores.py" \
+  "$DIAGNOSTICS_DIR/preflight_backbone.py" \
   "$DIAGNOSTICS_DIR/mechanism_smoke.py"
 
 run_logged bash_syntax bash -n \
@@ -302,6 +322,23 @@ run_logged bash_syntax bash -n \
   scripts/workflows/run_server_phase3.sh \
   scripts/run_server_visa.sh \
   scripts/workflows/run_server_visa.sh
+
+if [[ "$PREFLIGHT_HF_BACKBONE" == "1" ]]; then
+  PREFLIGHT_ARGS=()
+  if [[ "$BACKBONE_PREFLIGHT_CLEAN_LOCKS" == "1" ]]; then
+    PREFLIGHT_ARGS+=(--clean-locks)
+  fi
+  run_logged_timeout "$BACKBONE_PREFLIGHT_TIMEOUT_SECONDS" backbone_preflight \
+    "$PYTHON_BIN" -u "$DIAGNOSTICS_DIR/preflight_backbone.py" \
+    --config "$MAIN_CONFIG" \
+    --config "$CONSERVATIVE_CONFIG" \
+    --config "$EXPERIMENTAL_CONFIG" \
+    --local-files-only auto \
+    --retry-force-download \
+    "${PREFLIGHT_ARGS[@]}"
+  export METANATH_LOCAL_FILES_ONLY="$LOCAL_FILES_ONLY_AFTER_PREFLIGHT"
+  echo "Using local HuggingFace cache after backbone preflight: METANATH_LOCAL_FILES_ONLY=$METANATH_LOCAL_FILES_ONLY"
+fi
 
 if [[ "$RUN_MAIN" == "1" ]]; then
   MAIN_ANCHOR_SUFFIX="full_main_anchor_${MAIN_MAX_TASKS}task_${STAMP}"

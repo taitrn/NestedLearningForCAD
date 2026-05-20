@@ -241,6 +241,17 @@ python scripts/benchmark/collect_benchmark_table.py \
 
 Tables generated from local artifacts are reproduced rows. External numbers for UCAD, IUF, CDAD, PatchCore, SimpleNet, MambaAD, InvAD, or ReplayCAD may be used as context only if they are clearly labeled as paper-reported references.
 
+For a lightweight local PatchCore-style baseline row:
+
+```bash
+python scripts/baselines/patchcore_cad.py \
+  --config conf/full_demo.yaml \
+  --max_tasks 15 \
+  --run_suffix mvtec_full15
+```
+
+This adapter follows the same sequential task/evaluation protocol and emits `task_records.json`, but it is not the official PatchCore paper implementation.
+
 ---
 
 ## 📁 Project Structure
@@ -269,6 +280,7 @@ NestedLearningForCAD/
 ├── results/                           # Generated experiment outputs
 ├── scripts/                           # CLI entrypoints, workflows, diagnostics
 │   ├── benchmark/                     # ReplayCAD-style Avg/FM metric tooling
+│   ├── baselines/                     # Local baseline adapters
 │   ├── diagnostics/
 │   ├── pipeline/
 │   ├── workflows/
@@ -379,7 +391,15 @@ Useful knobs:
 REQUIRE_EXPERIMENTAL_ACCEPTED=1 bash scripts/run_full_demo.sh
 PYTHON_BIN=/path/to/python bash scripts/run_full_demo.sh
 STEP_TIMEOUT_SECONDS=21600 bash scripts/run_full_demo.sh
+BACKBONE_PREFLIGHT_TIMEOUT_SECONDS=900 bash scripts/run_full_demo.sh
+PREFLIGHT_HF_BACKBONE=0 bash scripts/run_full_demo.sh  # debugging only
 ```
+
+The full-demo workflow runs a HuggingFace backbone preflight by default. It
+caches/verifies `model.backbone` once, removes stale HF lock files, and then
+sets `METANATH_LOCAL_FILES_ONLY=1` for the remaining train/eval/Phase 3 steps.
+This avoids losing a long Kaggle run to a repeated `from_pretrained` download or
+cache lock.
 
 ### 3. Run on Kaggle
 

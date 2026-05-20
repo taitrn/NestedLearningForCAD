@@ -67,9 +67,18 @@ class ContinualAnomalyDataset(Dataset):
         self.loader_target = default_mask_loader
 
         if self.is_train:
-            self.anomaly_generator = build_anomaly_generator(cfg)
-            gen_name = cfg.get('anomaly_generator', 'superpixel')
-            logger.info(f"[{category.upper()}] Anomaly generator: '{gen_name}'")
+            self.synthetic_train_probability = float(cfg.get('synthetic_train_probability', 0.5))
+            self.synthetic_train_probability = min(max(self.synthetic_train_probability, 0.0), 1.0)
+            if self.synthetic_train_probability > 0:
+                self.anomaly_generator = build_anomaly_generator(cfg)
+                gen_name = cfg.get('anomaly_generator', 'superpixel')
+                logger.info(
+                    f"[{category.upper()}] Anomaly generator: '{gen_name}' "
+                    f"(p={self.synthetic_train_probability:.2f})"
+                )
+            else:
+                self.anomaly_generator = None
+                logger.info(f"[{category.upper()}] Synthetic anomaly generator disabled.")
 
         self.data_all = []
         self._build_dataset_index()
@@ -150,7 +159,7 @@ class ContinualAnomalyDataset(Dataset):
         img_w, img_h = img.size   # (width, height)
 
         if self.is_train:
-            if np.random.rand() > 0.5:
+            if np.random.rand() < self.synthetic_train_probability:
                 img_np = np.array(img).astype(np.float32)   # (H, W, 3)
                 result_np, mask_np, has_anomaly = self.anomaly_generator.generate(
                     img_np, self.category
